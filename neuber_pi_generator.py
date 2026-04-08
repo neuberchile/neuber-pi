@@ -206,10 +206,10 @@ PROVEEDOR_DATA = {
         'email': '',
         'origin': 'Chile',
         'port': 'Puerto Chile',
-        'bank': 'Ver Sales Contract',
-        'account': 'Ver Sales Contract',
-        'swift': 'Ver Sales Contract',
-        'bank_address': 'Chile',
+        'bank': 'Banco de Chile',
+        'account': '5-240-10019-05',
+        'swift': 'BCHICLRM',
+        'bank_address': 'Santiago, Chile',
         'incoterm_note': 'CIF/FOB'
     },
     'Santa Blanca': {
