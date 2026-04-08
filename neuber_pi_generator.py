@@ -535,9 +535,10 @@ def generate_pi_document(deal_data, pi_number):
                 pass
 
     # ── FIRMAS ────────────────────────────────────────────────────────────────
+    doc.add_paragraph()  # espacio antes de firmas
+
     tbl_sign = doc.add_table(rows=1, cols=2)
     tbl_sign.style = 'Table Grid'
-    tbl_sign.paragraph_format.space_before = Pt(8) if hasattr(tbl_sign, 'paragraph_format') else None
 
     sign_left  = tbl_sign.rows[0].cells[0]
     sign_right = tbl_sign.rows[0].cells[1]
