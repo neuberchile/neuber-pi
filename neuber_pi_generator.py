@@ -29,8 +29,8 @@ F_AGENTE       = 'e6be65c16bd853251d87c2dfb51e0c27c390cb3c'
 F_SPECIE       = 'e041539f14e7191423096602086f2851e7595c33'
 F_PRODUCT      = 'e3a582a6b130ded4f1edffbc8cc502de2ff70ba8'
 F_VOLUMEN      = '6b060e20ce5b99df7118e876b887d48f48d36fcb'
-F_INCOTERM     = '3ffd5d7de10babee6fb7ffbba9ece4ed6b94d67d'
-F_POD          = '7fca81dc2aba466b084de4402a2ea44a777afe27'
+F_INCOTERM     = 'bbd9343f7be5f218230c1863d977b7a10aaa22a3'
+F_POD          = 'da61aaa7dcbbfa40b6834b9fa462d1f187699b9b'
 F_MES_EMBARQUE = 'be724a357e45d9429a201cbe1527e3f51daf5fab'
 F_REF_CONTRATO = '03fbb80f2776069b6fdf81cd73766a91a11b87df'
 F_GRADE        = '7558474ef96645532c47d9f187274077f38380f3'
@@ -200,7 +200,7 @@ PROVEEDOR_DATA = {
     },
     'Agrifor': {
         'name': 'AGRIFOR S.A.',
-        'address': 'Chile',
+        'address': 'Bulnes 815 Oficina 502, Temuco, Chile',
         'tax_id': '',
         'phone': '',
         'email': '',
@@ -210,7 +210,7 @@ PROVEEDOR_DATA = {
         'account': 'Ver Sales Contract',
         'swift': 'Ver Sales Contract',
         'bank_address': 'Chile',
-        'incoterm_note': 'FOB'
+        'incoterm_note': 'CIF/FOB'
     },
     'Santa Blanca': {
         'name': 'SANTA BLANCA S.A.',
