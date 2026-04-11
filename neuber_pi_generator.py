@@ -29,8 +29,8 @@ F_AGENTE       = 'e6be65c16bd853251d87c2dfb51e0c27c390cb3c'
 F_SPECIE       = 'e041539f14e7191423096602086f2851e7595c33'
 F_PRODUCT      = 'e3a582a6b130ded4f1edffbc8cc502de2ff70ba8'
 F_VOLUMEN      = '6b060e20ce5b99df7118e876b887d48f48d36fcb'
-F_INCOTERM     = 'bbd9343f7be5f218230c1863d977b7a10aaa22a3'
-F_POD          = 'da61aaa7dcbbfa40b6834b9fa462d1f187699b9b'
+F_INCOTERM     = '3ffd5d7de10babee6fb7ffbba9ece4ed6b94d67d'
+F_POD          = '7fca81dc2aba466b084de4402a2ea44a777afe27'
 F_MES_EMBARQUE = 'be724a357e45d9429a201cbe1527e3f51daf5fab'
 F_REF_CONTRATO = '03fbb80f2776069b6fdf81cd73766a91a11b87df'
 F_GRADE        = '7558474ef96645532c47d9f187274077f38380f3'
@@ -39,19 +39,45 @@ F_PRECIO       = '63ebae55f11ccaefeafab28d66e3584a2503d047'
 F_PAGO         = '3f353a1fd6fe963964da09202436a5881d9155b9'
 F_ITEMS        = 'f122062872dd838e7e37c0094000d28284b3e17f'  # ← NUEVO campo Ítems
 
-# ─── PI NUMBER COUNTER ────────────────────────────────────────────────────────
-PI_COUNTER_FILE = 'pi_counter.json'
+# ─── PI NUMBER COUNTER (persistente en Pipedrive deal 467) ───────────────────
+PI_SYSTEM_DEAL_ID = 467   # Deal "NEUBER_SYSTEM — NO BORRAR"
+PI_COUNTER_PREFIX = 'PI_COUNTER:'
+
+def _get_pi_counter_from_pipedrive():
+    """Lee el último número de PI desde las notas del deal sistema."""
+    try:
+        r = requests.get(
+            f'{PIPEDRIVE_BASE}/deals/{PI_SYSTEM_DEAL_ID}/notes',
+            params={'api_token': PIPEDRIVE_API, 'limit': 100}
+        )
+        notes = r.json().get('data') or []
+        for note in notes:
+            content = note.get('content', '')
+            if content.startswith(PI_COUNTER_PREFIX):
+                return int(content.replace(PI_COUNTER_PREFIX, '').strip())
+    except Exception as e:
+        print(f'[PI] Error leyendo counter desde Pipedrive: {e}')
+    return 7700  # fallback si no hay nota aún
+
+def _set_pi_counter_in_pipedrive(number):
+    """Escribe el nuevo número de PI como nota en el deal sistema."""
+    try:
+        requests.post(
+            f'{PIPEDRIVE_BASE}/notes',
+            params={'api_token': PIPEDRIVE_API},
+            json={
+                'deal_id': PI_SYSTEM_DEAL_ID,
+                'content': f'{PI_COUNTER_PREFIX}{number}'
+            }
+        )
+    except Exception as e:
+        print(f'[PI] Error guardando counter en Pipedrive: {e}')
 
 def get_next_pi_number():
-    try:
-        with open(PI_COUNTER_FILE) as f:
-            data = json.load(f)
-    except:
-        data = {'last': 7699}
-    data['last'] += 1
-    with open(PI_COUNTER_FILE, 'w') as f:
-        json.dump(data, f)
-    return data['last']
+    last = _get_pi_counter_from_pipedrive()
+    next_num = last + 1
+    _set_pi_counter_in_pipedrive(next_num)
+    return next_num
 
 # ─── PARSE ITEMS ──────────────────────────────────────────────────────────────
 def parse_items(items_text, default_price=0):
@@ -200,17 +226,17 @@ PROVEEDOR_DATA = {
     },
     'Agrifor': {
         'name': 'AGRIFOR S.A.',
-        'address': 'Bulnes 815 Oficina 502, Temuco, Chile',
+        'address': 'Chile',
         'tax_id': '',
         'phone': '',
         'email': '',
         'origin': 'Chile',
         'port': 'Puerto Chile',
-        'bank': 'Banco de Chile',
-        'account': '5-240-10019-05',
-        'swift': 'BCHICLRM',
-        'bank_address': 'Santiago, Chile',
-        'incoterm_note': 'CIF/FOB'
+        'bank': 'Ver Sales Contract',
+        'account': 'Ver Sales Contract',
+        'swift': 'Ver Sales Contract',
+        'bank_address': 'Chile',
+        'incoterm_note': 'FOB'
     },
     'Santa Blanca': {
         'name': 'SANTA BLANCA S.A.',
@@ -535,10 +561,9 @@ def generate_pi_document(deal_data, pi_number):
                 pass
 
     # ── FIRMAS ────────────────────────────────────────────────────────────────
-    doc.add_paragraph()  # espacio antes de firmas
-
     tbl_sign = doc.add_table(rows=1, cols=2)
     tbl_sign.style = 'Table Grid'
+    tbl_sign.paragraph_format.space_before = Pt(8) if hasattr(tbl_sign, 'paragraph_format') else None
 
     sign_left  = tbl_sign.rows[0].cells[0]
     sign_right = tbl_sign.rows[0].cells[1]
@@ -652,7 +677,7 @@ def generate_pi_manual(deal_id):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.0'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.2'})
 
 
 if __name__ == '__main__':
