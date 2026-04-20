@@ -2,7 +2,7 @@
 """
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
-v2.5 — SWIFT Santa Blanca confirmado (BSCHCLRM) + todos los proveedores operacionales
+v2.6 — fix paragraph_format en Table + fix lectura notas Pipedrive (POL-003 operacional)
 """
 
 from flask import Flask, request, jsonify
@@ -270,10 +270,10 @@ def get_registered_bank_hash(proveedor_name):
     try:
         url = f"{PIPEDRIVE_BASE}/deals/467/flow?api_token={PIPEDRIVE_API}&limit=200"
         r = requests.get(url, timeout=10)
-        data = r.json().get('data', {}).get('items', [])
+        data = r.json().get('data') or []
         key = f"BANK_HASH:{proveedor_name}:"
         for item in data:
-            content = (item.get('data') or {}).get('content') or ''
+            content = item.get('content') or ''
             if key in content:
                 start = content.find(key) + len(key)
                 return content[start:start + 64].strip()
@@ -633,7 +633,7 @@ def generate_pi_document(deal_data, pi_number):
     # ── FIRMAS ────────────────────────────────────────────────────────────────
     tbl_sign = doc.add_table(rows=1, cols=2)
     tbl_sign.style = 'Table Grid'
-    tbl_sign.paragraph_format.space_before = Pt(8) if hasattr(tbl_sign, 'paragraph_format') else None
+    # (Table no soporta paragraph_format — se omite el espaciado vertical aquí)
 
     sign_left  = tbl_sign.rows[0].cells[0]
     sign_right = tbl_sign.rows[0].cells[1]
@@ -747,10 +747,11 @@ def generate_pi_manual(deal_id):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.5'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.6'})
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
