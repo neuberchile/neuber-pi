@@ -2,7 +2,7 @@
 """
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
-v2.4 — Datos bancarios completos + Hash SHA256 verificación + BEC warning
+v2.5 — SWIFT Santa Blanca confirmado (BSCHCLRM) + todos los proveedores operacionales
 """
 
 from flask import Flask, request, jsonify
@@ -223,7 +223,7 @@ PROVEEDOR_DATA = {
         'port': 'Puerto Chile',
         'bank': 'Banco Santander',
         'account': '510005573-4 (USD) / 5680564-8 (CLP)',
-        'swift': 'PENDIENTE_MARCIA',
+        'swift': 'BSCHCLRM',
         'bank_address': 'Chile',
         'incoterm_note': 'FOB'
     },
@@ -747,9 +747,10 @@ def generate_pi_manual(deal_id):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.3'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.5'})
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
