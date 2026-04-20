@@ -2,7 +2,7 @@
 """
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
-v2.6 — fix paragraph_format en Table + fix lectura notas Pipedrive (POL-003 operacional)
+v2.7 — master note JSON para hashes (fix idempotencia) + import re
 """
 
 from flask import Flask, request, jsonify
@@ -15,6 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 import io
 import json
+import re
 import hashlib
 
 app = Flask(__name__)
@@ -265,38 +266,68 @@ def compute_bank_hash(proveedor_name):
     return hashlib.sha256(payload).hexdigest()
 
 
-def get_registered_bank_hash(proveedor_name):
-    """Lee de deal 467 Pipedrive el hash bancario registrado del proveedor."""
+_MASTER_NOTE_MARKER = "BANK_HASHES_MASTER:"
+
+
+def _read_master_note():
+    """Lee la nota master de deal 467. Devuelve (note_id, hashes_dict).
+
+    Si no existe, devuelve (None, {}).
+    """
     try:
-        url = f"{PIPEDRIVE_BASE}/deals/467/flow?api_token={PIPEDRIVE_API}&limit=200"
+        url = f"{PIPEDRIVE_BASE}/notes?deal_id=467&api_token={PIPEDRIVE_API}&limit=100"
         r = requests.get(url, timeout=10)
         data = r.json().get('data') or []
-        key = f"BANK_HASH:{proveedor_name}:"
         for item in data:
             content = item.get('content') or ''
-            if key in content:
-                start = content.find(key) + len(key)
-                return content[start:start + 64].strip()
+            # Pipedrive agrega <br /> y <p>; limpiamos tags antes de parsear
+            clean = re.sub(r'<[^>]+>', '', content).strip()
+            if clean.startswith(_MASTER_NOTE_MARKER):
+                payload = clean[len(_MASTER_NOTE_MARKER):].strip()
+                try:
+                    hashes = json.loads(payload)
+                    if isinstance(hashes, dict):
+                        return item.get('id'), hashes
+                except Exception as je:
+                    print(f"[hash] Master note JSON inválido (id={item.get('id')}): {je}")
     except Exception as e:
-        print(f"[hash] Error leyendo hash deal 467: {e}")
-    return None
+        print(f"[hash] Error leyendo master note deal 467: {e}")
+    return None, {}
+
+
+def _write_master_note(note_id, hashes_dict):
+    """Escribe o actualiza la nota master en deal 467."""
+    try:
+        payload_str = _MASTER_NOTE_MARKER + json.dumps(hashes_dict, sort_keys=True)
+        if note_id:
+            url = f"{PIPEDRIVE_BASE}/notes/{note_id}?api_token={PIPEDRIVE_API}"
+            requests.put(url, json={'content': payload_str}, timeout=10)
+        else:
+            url = f"{PIPEDRIVE_BASE}/notes?api_token={PIPEDRIVE_API}"
+            requests.post(url, json={'deal_id': 467, 'content': payload_str}, timeout=10)
+        return True
+    except Exception as e:
+        print(f"[hash] Error escribiendo master note deal 467: {e}")
+        return False
+
+
+def get_registered_bank_hash(proveedor_name):
+    """Lee el hash registrado del proveedor desde la master note de deal 467."""
+    _, hashes = _read_master_note()
+    return hashes.get(proveedor_name)
 
 
 def register_bank_hash(proveedor_name):
-    """Registra el hash actual del proveedor en deal 467 (idempotente)."""
+    """Registra/actualiza el hash del proveedor en la master note (idempotente)."""
     try:
         current = compute_bank_hash(proveedor_name)
-        registered = get_registered_bank_hash(proveedor_name)
-        if registered == current:
-            return True
-        url = f"{PIPEDRIVE_BASE}/notes?api_token={PIPEDRIVE_API}"
-        requests.post(url, json={
-            'deal_id': 467,
-            'content': f"BANK_HASH:{proveedor_name}:{current}\nRegistrado: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        }, timeout=10)
-        return True
+        note_id, hashes = _read_master_note()
+        if hashes.get(proveedor_name) == current:
+            return True  # ya registrado con el mismo valor
+        hashes[proveedor_name] = current
+        return _write_master_note(note_id, hashes)
     except Exception as e:
-        print(f"[hash] Error registrando hash: {e}")
+        print(f"[hash] Error registrando hash {proveedor_name}: {e}")
         return False
 
 
@@ -747,11 +778,12 @@ def generate_pi_manual(deal_id):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.6'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.7'})
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
 
