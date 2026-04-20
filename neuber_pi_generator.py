@@ -2,7 +2,7 @@
 """
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
-v2.7 — master note JSON para hashes (fix idempotencia) + import re
+v2.8 — endpoint /bank_hash/register para pre-cargar hashes
 """
 
 from flask import Flask, request, jsonify
@@ -776,14 +776,42 @@ def generate_pi_manual(deal_id):
     })
 
 
+@app.route('/bank_hash/register', methods=['GET', 'POST'])
+def bank_hash_register_all():
+    """Registra/actualiza hashes SHA256 de todos los proveedores en la master note de deal 467.
+    Idempotente: si un hash ya está registrado con el mismo valor, no hace nada.
+    Útil para pre-cargar hashes sin necesidad de emitir un PI real.
+    """
+    results = {}
+    for proveedor_name in PROVEEDOR_DATA.keys():
+        if proveedor_name == 'DEFAULT':
+            continue
+        try:
+            current = compute_bank_hash(proveedor_name)
+            registered_before = get_registered_bank_hash(proveedor_name)
+            if registered_before == current:
+                results[proveedor_name] = {'status': 'unchanged', 'hash_prefix': current[:12]}
+            else:
+                ok = register_bank_hash(proveedor_name)
+                action = 'registered' if registered_before is None else 'updated'
+                results[proveedor_name] = {
+                    'status': action if ok else 'failed',
+                    'hash_prefix': current[:12]
+                }
+        except Exception as e:
+            results[proveedor_name] = {'status': 'error', 'error': str(e)}
+    return jsonify({'status': 'ok', 'providers': results})
+
+
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.7'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.8'})
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
 
 
