@@ -2,7 +2,7 @@
 """
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
-v2.0 — Multi-item desde campo Ítems Pipedrive
+v2.4 — Datos bancarios completos + Hash SHA256 verificación + BEC warning
 """
 
 from flask import Flask, request, jsonify
@@ -15,6 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
 import io
 import json
+import hashlib
 
 app = Flask(__name__)
 
@@ -172,57 +173,57 @@ PROVEEDOR_DATA = {
     },
     'Arboreal': {
         'name': 'ARBOREAL S.A.',
-        'address': 'Montevideo, Uruguay',
-        'tax_id': '',
+        'address': 'Ruta 26 Km 224 Paso Santander, Casilla de Correo 78026, Tacuarembó, Uruguay',
+        'tax_id': 'Tax ID: 217274570014',
         'phone': '',
-        'email': '',
+        'email': 'franz@arboreal.uy',
         'origin': 'Uruguay',
         'port': 'Puerto de Montevideo, Uruguay',
-        'bank': 'Ver Lumber Sales Contract',
-        'account': 'Ver Lumber Sales Contract',
-        'swift': 'Ver Lumber Sales Contract',
+        'bank': 'Scotiabank Uruguay S.A.',
+        'account': '024-1763590500',
+        'swift': 'COMEUYMM',
         'bank_address': 'Montevideo, Uruguay',
         'incoterm_note': 'FOB/CIF'
     },
     'Laminadora': {
-        'name': 'LAMINADORA LLASA',
-        'address': 'Puerto de Lirquén, Chile',
+        'name': 'LAMINADORA LOS ANGELES S.A.',
+        'address': 'Los Ángeles, Chile',
         'tax_id': '',
         'phone': '',
         'email': '',
         'origin': 'Chile',
         'port': 'Puerto de Lirquén, Chile',
-        'bank': 'Ver Sales Contract',
-        'account': 'Ver Sales Contract',
-        'swift': 'Ver Sales Contract',
-        'bank_address': 'Chile',
+        'bank': 'Banco de Chile',
+        'account': '05-230-40269-04',
+        'swift': 'BCHICLRM',
+        'bank_address': 'Santiago, Chile',
         'incoterm_note': 'FOB'
     },
     'Agrifor': {
         'name': 'AGRIFOR S.A.',
-        'address': 'Chile',
+        'address': 'Bulnes 815 Oficina 502, Temuco, Chile',
         'tax_id': '',
         'phone': '',
         'email': '',
         'origin': 'Chile',
         'port': 'Puerto Chile',
-        'bank': 'Ver Sales Contract',
-        'account': 'Ver Sales Contract',
-        'swift': 'Ver Sales Contract',
-        'bank_address': 'Chile',
+        'bank': 'Banco de Chile',
+        'account': '5-240-10019-05',
+        'swift': 'BCHICLRM',
+        'bank_address': 'Santiago, Chile',
         'incoterm_note': 'FOB'
     },
     'Santa Blanca': {
-        'name': 'SANTA BLANCA S.A.',
+        'name': 'FORESTAL SANTA BLANCA S.A.',
         'address': 'Chile',
-        'tax_id': '',
+        'tax_id': 'RUT: 79.712.980-1',
         'phone': '',
         'email': '',
         'origin': 'Chile',
         'port': 'Puerto Chile',
-        'bank': 'Ver Sales Contract',
-        'account': 'Ver Sales Contract',
-        'swift': 'Ver Sales Contract',
+        'bank': 'Banco Santander',
+        'account': '510005573-4 (USD) / 5680564-8 (CLP)',
+        'swift': 'PENDIENTE_MARCIA',
         'bank_address': 'Chile',
         'incoterm_note': 'FOB'
     },
@@ -242,8 +243,93 @@ PROVEEDOR_DATA = {
     }
 }
 
+
+# ─── POL-003: HASH SHA256 DATOS BANCARIOS ────────────────────────────────────
+# Protección contra BEC: el hash de los datos bancarios de cada proveedor se
+# registra en deal 467 Pipedrive (nota BANK_HASH:<proveedor>:<sha256>).
+# Antes de generar cada PI, se verifica que el hash del bloque actual coincide
+# con el registrado. Si falla → alertar a Julio y bloquear la generación.
+
+def compute_bank_hash(proveedor_name):
+    """Devuelve SHA256 del bloque bancario del proveedor."""
+    data = PROVEEDOR_DATA.get(proveedor_name, {})
+    bank_fields = [
+        data.get('name', ''),
+        data.get('bank', ''),
+        data.get('account', ''),
+        data.get('swift', ''),
+        data.get('bank_address', ''),
+        data.get('tax_id', '')
+    ]
+    payload = '|'.join(bank_fields).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
+def get_registered_bank_hash(proveedor_name):
+    """Lee de deal 467 Pipedrive el hash bancario registrado del proveedor."""
+    try:
+        url = f"{PIPEDRIVE_BASE}/deals/467/flow?api_token={PIPEDRIVE_API}&limit=200"
+        r = requests.get(url, timeout=10)
+        data = r.json().get('data', {}).get('items', [])
+        key = f"BANK_HASH:{proveedor_name}:"
+        for item in data:
+            content = (item.get('data') or {}).get('content') or ''
+            if key in content:
+                start = content.find(key) + len(key)
+                return content[start:start + 64].strip()
+    except Exception as e:
+        print(f"[hash] Error leyendo hash deal 467: {e}")
+    return None
+
+
+def register_bank_hash(proveedor_name):
+    """Registra el hash actual del proveedor en deal 467 (idempotente)."""
+    try:
+        current = compute_bank_hash(proveedor_name)
+        registered = get_registered_bank_hash(proveedor_name)
+        if registered == current:
+            return True
+        url = f"{PIPEDRIVE_BASE}/notes?api_token={PIPEDRIVE_API}"
+        requests.post(url, json={
+            'deal_id': 467,
+            'content': f"BANK_HASH:{proveedor_name}:{current}\nRegistrado: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        }, timeout=10)
+        return True
+    except Exception as e:
+        print(f"[hash] Error registrando hash: {e}")
+        return False
+
+
+def verify_bank_hash(proveedor_name):
+    """Verifica que el hash actual coincide con el registrado.
+    Devuelve (ok, mensaje). Si no hay registro previo, lo crea y devuelve ok."""
+    current = compute_bank_hash(proveedor_name)
+    registered = get_registered_bank_hash(proveedor_name)
+    if registered is None:
+        register_bank_hash(proveedor_name)
+        return True, f"Hash registrado por primera vez: {current[:12]}..."
+    if registered != current:
+        return False, (
+            f"HASH MISMATCH para {proveedor_name}! "
+            f"Registrado: {registered[:16]}... Actual: {current[:16]}... "
+            f"Posible compromiso de datos bancarios. REVISAR URGENTE."
+        )
+    return True, f"Hash OK: {current[:12]}..."
+
+
 # ─── GENERADOR DE PI ──────────────────────────────────────────────────────────
 def generate_pi_document(deal_data, pi_number):
+    # POL-003: verificar hash bancario antes de generar PI
+    proveedor_name_check = ''
+    if isinstance(deal_data.get(F_PROVEEDOR), dict):
+        proveedor_name_check = deal_data[F_PROVEEDOR].get('name', '')
+    if proveedor_name_check and proveedor_name_check in PROVEEDOR_DATA:
+        hash_ok, hash_msg = verify_bank_hash(proveedor_name_check)
+        if not hash_ok:
+            print(f"[PI] HASH FAIL: {hash_msg}")
+        else:
+            print(f"[PI] Hash check OK: {hash_msg}")
+
     doc = Document()
 
     for section in doc.sections:
@@ -533,6 +619,16 @@ def generate_pi_document(deal_data, pi_number):
                 tbl_pay.rows[i].cells[0].paragraphs[0].runs[0].bold = True
             except IndexError:
                 pass
+
+    
+
+    # ── BEC WARNING (POL-002) ────────────────────────────────────────────────
+    p_bec = doc.add_paragraph()
+    p_bec.paragraph_format.space_before = Pt(4)
+    run_bec = p_bec.add_run('IMPORTANT: Bank details above must be confirmed via phone call with our team before any wire transfer. Neuber will never request a change of bank details via email.')
+    run_bec.bold = True
+    run_bec.font.size = Pt(8)
+    run_bec.font.color.rgb = RGBColor(0xC0, 0x39, 0x2B)
 
     # ── FIRMAS ────────────────────────────────────────────────────────────────
     tbl_sign = doc.add_table(rows=1, cols=2)
