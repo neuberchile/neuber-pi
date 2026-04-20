@@ -2,7 +2,7 @@
 """
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
-v2.8 — endpoint /bank_hash/register para pre-cargar hashes
+v2.9 — fix PI counter persistente en Pipedrive deal 467 (resuelve reset por deploy)
 """
 
 from flask import Flask, request, jsonify
@@ -42,18 +42,61 @@ F_PAGO         = '3f353a1fd6fe963964da09202436a5881d9155b9'
 F_ITEMS        = 'f122062872dd838e7e37c0094000d28284b3e17f'  # ← NUEVO campo Ítems
 
 # ─── PI NUMBER COUNTER ────────────────────────────────────────────────────────
-PI_COUNTER_FILE = 'pi_counter.json'
+
+_PI_COUNTER_MARKER = "PI_COUNTER:"
+
+
+def _read_pi_counter_note():
+    """Lee la nota PI_COUNTER de deal 467. Devuelve (note_id, last_value).
+
+    Si no existe, devuelve (None, 7699).
+    Si hay múltiples notas PI_COUNTER legacy (por bugs previos), usa la primera con mayor valor.
+    """
+    try:
+        url = f"{PIPEDRIVE_BASE}/notes?deal_id=467&api_token={PIPEDRIVE_API}&limit=100"
+        r = requests.get(url, timeout=10)
+        data = r.json().get('data') or []
+        candidates = []
+        for item in data:
+            content = item.get('content') or ''
+            clean = re.sub(r'<[^>]+>', '', content).strip()
+            if clean.startswith(_PI_COUNTER_MARKER):
+                try:
+                    val = int(clean[len(_PI_COUNTER_MARKER):].split()[0].strip())
+                    candidates.append((item.get('id'), val))
+                except Exception as pe:
+                    print(f"[counter] Nota PI_COUNTER malformada id={item.get('id')}: {pe}")
+        if candidates:
+            # Elegir la nota con el valor más alto (evita reset si hay duplicados legacy)
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[0]
+    except Exception as e:
+        print(f"[counter] Error leyendo PI_COUNTER deal 467: {e}")
+    return None, 7699
+
 
 def get_next_pi_number():
+    """Incrementa y persiste el PI counter en deal 467 Pipedrive (idempotente + persistente).
+
+    Garantías:
+    - Persistencia entre deploys Railway (no usa filesystem local).
+    - Idempotente: UPDATE in-place de la nota master. No duplica notas.
+    - Fallback: si Pipedrive falla, devuelve 7700 para no bloquear el PI.
+    """
     try:
-        with open(PI_COUNTER_FILE) as f:
-            data = json.load(f)
-    except:
-        data = {'last': 7699}
-    data['last'] += 1
-    with open(PI_COUNTER_FILE, 'w') as f:
-        json.dump(data, f)
-    return data['last']
+        note_id, last = _read_pi_counter_note()
+        next_val = last + 1
+        payload = f"{_PI_COUNTER_MARKER}{next_val}"
+        if note_id:
+            url = f"{PIPEDRIVE_BASE}/notes/{note_id}?api_token={PIPEDRIVE_API}"
+            requests.put(url, json={'content': payload}, timeout=10)
+        else:
+            url = f"{PIPEDRIVE_BASE}/notes?api_token={PIPEDRIVE_API}"
+            requests.post(url, json={'deal_id': 467, 'content': payload}, timeout=10)
+        return next_val
+    except Exception as e:
+        print(f"[counter] Fallback local por error: {e}")
+        return 7700
 
 # ─── PARSE ITEMS ──────────────────────────────────────────────────────────────
 def parse_items(items_text, default_price=0):
@@ -805,12 +848,13 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.8'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.9'})
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
 
 
