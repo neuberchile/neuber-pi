@@ -3,6 +3,7 @@
 NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
 v2.9 — fix PI counter persistente en Pipedrive deal 467 (resuelve reset por deploy)
+v2.10 — parse_items tolerante a formato natural sin separadores (espacios, m3, USD, RL, etc.)
 """
 
 from flask import Flask, request, jsonify
@@ -99,35 +100,98 @@ def get_next_pi_number():
         return 7700
 
 # ─── PARSE ITEMS ──────────────────────────────────────────────────────────────
+_SIZE_PATTERN = re.compile(r'\d+\s*[xX×]\s*\d+\s*[xX×]\s*(?:\d+|RL)', re.IGNORECASE)
+_NUM_PATTERN = re.compile(r'^[-+]?\d+(?:[.,]\d+)?$')
+
+
+def _to_float(s):
+    return float(s.replace(',', '.'))
+
+
 def parse_items(items_text, default_price=0):
     """
     Parsea el campo Ítems de Pipedrive.
-    Formato por línea: ESPxANCHOxLARGO | M3 | PRECIO
-    Ejemplo: 16x77x4000 | 140 | 240
-    El precio es opcional — si no viene, usa default_price.
-    Retorna lista de dicts: size, volume, price, total
+
+    Formato preferido (v2.10+): una línea por ítem, tres tokens separados por espacios.
+        EspxAnchoxLargo Volumen Precio
+        Ejemplo: 15x86x4080 200 260
+
+    Tolerancias:
+      - Sufijo m3 / m³ en el volumen: "200m3", "200 m3"
+      - Prefijo/sufijo USD o $ en el precio: "USD 260", "$260", "260 USD"
+      - Largo "RL" (random length): "86x86xRL"
+      - Mayúsculas/minúsculas en la "x": "15X86x4080"
+      - Coma decimal: "200,5"
+      - Espacios extra
+      - Formato legacy con pipes: "15x86x4080 | 200 | 260" (sigue funcionando)
+
+    Si una línea no puede parsearse, se descarta silenciosamente.
+    Si el precio no aparece en la línea, se usa default_price.
+
+    Retorna: lista de dicts {size, volume, price, total}
     """
     result = []
     if not items_text:
         return result
+
     lines = [l.strip() for l in items_text.strip().splitlines() if l.strip()]
     for line in lines:
-        parts = [p.strip() for p in line.split('|')]
-        if len(parts) < 2:
+        # Rama legacy: si la línea contiene "|", usar split por pipes.
+        if '|' in line:
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) < 2:
+                continue
+            try:
+                size_str = parts[0]
+                volume = _to_float(parts[1])
+                if len(parts) >= 3 and parts[2]:
+                    price = _to_float(parts[2])
+                else:
+                    price = float(default_price or 0)
+                total = round(volume * price, 2)
+                result.append({'size': size_str, 'volume': volume, 'price': price, 'total': total})
+            except Exception:
+                continue
             continue
+
+        # Rama nueva: tokens separados por espacios.
+        # 1. Extraer el size con regex.
+        size_match = _SIZE_PATTERN.search(line)
+        if not size_match:
+            continue
+        size_str = size_match.group(0).replace(' ', '')
+
+        # 2. Quitar el size del string para procesar el resto.
+        rest = line[:size_match.start()] + ' ' + line[size_match.end():]
+
+        # 3. Quitar tokens reservados (USD, $, m3, m³) y normalizar.
+        rest = re.sub(r'\$', ' ', rest)
+        rest = re.sub(r'\bUSD\b', ' ', rest, flags=re.IGNORECASE)
+        rest = re.sub(r'(\d)\s*m\s*[3³]\b', r'\1', rest, flags=re.IGNORECASE)
+
+        # 4. Extraer todos los números del resto.
+        numbers = []
+        for tok in rest.split():
+            if _NUM_PATTERN.match(tok):
+                try:
+                    numbers.append(_to_float(tok))
+                except Exception:
+                    pass
+
+        if not numbers:
+            continue
+
         try:
-            size_str = parts[0].strip()
-            volume = float(parts[1].replace(',', '.'))
-            price = float(parts[2].replace(',', '.')) if len(parts) >= 3 and parts[2].strip() else float(default_price or 0)
+            volume = numbers[0]
+            if len(numbers) >= 2:
+                price = numbers[1]
+            else:
+                price = float(default_price or 0)
             total = round(volume * price, 2)
-            result.append({
-                'size': size_str,
-                'volume': volume,
-                'price': price,
-                'total': total
-            })
+            result.append({'size': size_str, 'volume': volume, 'price': price, 'total': total})
         except Exception:
             continue
+
     return result
 
 # ─── PIPEDRIVE API ────────────────────────────────────────────────────────────
@@ -848,7 +912,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.9'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.10'})
 
 
 if __name__ == '__main__':
