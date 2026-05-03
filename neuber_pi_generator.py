@@ -914,6 +914,13 @@ def webhook():
 
 @app.route('/generate_pi/<int:deal_id>', methods=['GET'])
 def generate_pi_manual(deal_id):
+    # GUARD v2.13: NUNCA generar PI sobre el deal sistema 467
+    # Sin este guard, llamadas accidentales/maliciosas a /generate_pi/467
+    # quemarian numeros del PI counter persistente (deal 467 storage central).
+    if deal_id == 467:
+        print(f"[PI] GUARD: deal sistema 467 ignorado en /generate_pi")
+        return jsonify({'status': 'system deal ignored'}), 200
+
     deal_data = get_deal(deal_id)
     if not deal_data:
         return jsonify({'error': 'deal not found'}), 404
@@ -959,6 +966,11 @@ def regenerate_pi_with_signature(deal_id):
     Returns:
         { status, pi_number, filename, content_b64 }
     """
+    # GUARD v2.13: NUNCA regenerar PI sobre el deal sistema 467
+    if deal_id == 467:
+        print(f"[PI] GUARD: deal sistema 467 ignorado en /regenerate_pi_with_signature")
+        return jsonify({'status': 'system deal ignored'}), 200
+
     import base64
 
     body = request.get_json(silent=True) or {}
@@ -1042,7 +1054,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.12'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.13'})
 
 
 if __name__ == '__main__':
