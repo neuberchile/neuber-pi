@@ -4,6 +4,7 @@ NEUBER — Script Generación Automática PI / SC
 Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI → adjunta en Pipedrive
 v2.9 — fix PI counter persistente en Pipedrive deal 467 (resuelve reset por deploy)
 v2.10 — parse_items tolerante a formato natural sin separadores (espacios, m3, USD, RL, etc.)
+v2.11 — endpoint /regenerate_pi_with_signature: regenera PI con imagen de firma del proveedor (Flujo 1.5)
 """
 
 from flask import Flask, request, jsonify
@@ -456,7 +457,22 @@ def verify_bank_hash(proveedor_name):
 
 
 # ─── GENERADOR DE PI ──────────────────────────────────────────────────────────
-def generate_pi_document(deal_data, pi_number):
+def generate_pi_document(deal_data, pi_number, signature_image_bytes=None, signature_mime='image/png'):
+    """
+    Genera documento Word PI a partir de deal_data.
+
+    Si signature_image_bytes es provisto, inserta la imagen como firma del proveedor
+    en la celda izquierda de la tabla de firmas. Tamaño objetivo: 1.2 inches de ancho.
+
+    Args:
+        deal_data: dict de Pipedrive
+        pi_number: int número correlativo
+        signature_image_bytes: bytes de imagen PNG/JPG (opcional)
+        signature_mime: 'image/png' | 'image/jpeg' (informativo, python-docx detecta)
+
+    Returns:
+        bytes del documento Word
+    """
     # POL-003: verificar hash bancario antes de generar PI
     proveedor_name_check = ''
     if isinstance(deal_data.get(F_PROVEEDOR), dict):
@@ -776,14 +792,48 @@ def generate_pi_document(deal_data, pi_number):
     sign_left  = tbl_sign.rows[0].cells[0]
     sign_right = tbl_sign.rows[0].cells[1]
 
-    for cell, label in [(sign_left, prov_info['name']), (sign_right, cliente_name.upper())]:
+    # Lado IZQUIERDO (proveedor): si hay firma, insertar imagen + nombre.
+    # Si no hay firma, mantener el comportamiento original (3 párrafos vacíos + nombre).
+    if signature_image_bytes:
+        # 1 párrafo vacío de espacio arriba para que la firma no quede pegada al borde
+        sign_left.add_paragraph('')
+        # Párrafo con la imagen, centrado horizontalmente
+        p_img = sign_left.add_paragraph()
+        p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run_img = p_img.add_run()
+        try:
+            sig_stream = io.BytesIO(signature_image_bytes)
+            run_img.add_picture(sig_stream, width=Inches(1.2))
+        except Exception as e:
+            # Falla silenciosa: si la imagen es inválida, dejar 3 párrafos vacíos
+            # como en el caso sin firma. Logueamos para diagnóstico.
+            print(f"[PI] add_picture failed: {e} — fallback a sin firma")
+            for _ in range(2):
+                sign_left.add_paragraph('')
+        # Nombre proveedor abajo de la firma
+        p_name_left = sign_left.add_paragraph(prov_info['name'])
+        if p_name_left.runs:
+            p_name_left.runs[0].bold = True
+            p_name_left.runs[0].font.size = Pt(8)
+            p_name_left.runs[0].font.name = 'Arial'
+    else:
+        # Comportamiento original sin firma
         for _ in range(3):
-            cell.add_paragraph('')
-        p_name = cell.add_paragraph(label)
-        if p_name.runs:
-            p_name.runs[0].bold = True
-            p_name.runs[0].font.size = Pt(8)
-            p_name.runs[0].font.name = 'Arial'
+            sign_left.add_paragraph('')
+        p_name_left = sign_left.add_paragraph(prov_info['name'])
+        if p_name_left.runs:
+            p_name_left.runs[0].bold = True
+            p_name_left.runs[0].font.size = Pt(8)
+            p_name_left.runs[0].font.name = 'Arial'
+
+    # Lado DERECHO (cliente): siempre comportamiento original
+    for _ in range(3):
+        sign_right.add_paragraph('')
+    p_name_right = sign_right.add_paragraph(cliente_name.upper())
+    if p_name_right.runs:
+        p_name_right.runs[0].bold = True
+        p_name_right.runs[0].font.size = Pt(8)
+        p_name_right.runs[0].font.name = 'Arial'
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -883,6 +933,78 @@ def generate_pi_manual(deal_id):
     })
 
 
+@app.route('/regenerate_pi_with_signature/<int:deal_id>', methods=['POST'])
+def regenerate_pi_with_signature(deal_id):
+    """
+    Regenera la PI Word de un deal incluyendo la imagen de firma del proveedor.
+
+    Reusa el pi_number provisto en el body (NO incrementa el counter), porque
+    una PI firmada es la misma PI que la sin firmar — solo cambia el documento
+    para incluir la firma.
+
+    Body JSON:
+        pi_number (int, required): número de PI a reusar
+        signature_b64 (str, required): imagen firma codificada en base64
+        signature_mime (str, optional): 'image/png' (default) | 'image/jpeg'
+        attach_to_deal (bool, optional, default true): si adjuntar al deal Ventas
+
+    Returns:
+        { status, pi_number, filename, content_b64 }
+    """
+    import base64
+
+    body = request.get_json(silent=True) or {}
+    pi_number = body.get('pi_number')
+    sig_b64 = body.get('signature_b64')
+    sig_mime = body.get('signature_mime', 'image/png')
+    attach_flag = body.get('attach_to_deal', True)
+
+    if not pi_number:
+        return jsonify({'error': 'pi_number is required'}), 400
+    if not sig_b64:
+        return jsonify({'error': 'signature_b64 is required'}), 400
+
+    deal_data = get_deal(deal_id)
+    if not deal_data:
+        return jsonify({'error': 'deal not found'}), 404
+
+    try:
+        sig_bytes = base64.b64decode(sig_b64)
+    except Exception as e:
+        return jsonify({'error': f'invalid base64: {e}'}), 400
+
+    if len(sig_bytes) < 100:
+        return jsonify({'error': f'signature image too small: {len(sig_bytes)} bytes'}), 400
+
+    try:
+        doc_bytes = generate_pi_document(
+            deal_data,
+            pi_number,
+            signature_image_bytes=sig_bytes,
+            signature_mime=sig_mime,
+        )
+    except Exception as e:
+        return jsonify({'error': f'document generation failed: {e}'}), 500
+
+    org_name = deal_data.get('org_name', '') or ''
+    filename = f'PI_{pi_number}_{org_name}_firmada.docx'.replace(' ', '_')
+
+    attach_result = None
+    if attach_flag:
+        attach_result = attach_file_to_deal(deal_id, filename, doc_bytes)
+
+    content_b64 = base64.b64encode(doc_bytes).decode('ascii')
+
+    return jsonify({
+        'status': 'success',
+        'pi_number': pi_number,
+        'filename': filename,
+        'size_bytes': len(doc_bytes),
+        'content_b64': content_b64,
+        'attached_to_deal': bool(attach_result and attach_result.get('success')) if attach_flag else None,
+    })
+
+
 @app.route('/bank_hash/register', methods=['GET', 'POST'])
 def bank_hash_register_all():
     """Registra/actualiza hashes SHA256 de todos los proveedores en la master note de deal 467.
@@ -912,7 +1034,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.10'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.11'})
 
 
 if __name__ == '__main__':
