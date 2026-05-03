@@ -865,6 +865,14 @@ def webhook():
 
     print(f"[PI] Webhook | Deal: {deal_id} | Stage: {stage_previous} → {stage_current}")
 
+    # GUARD v2.12: NUNCA procesar el deal sistema 467 (NEUBER_SYSTEM)
+    # El deal 467 contiene el PI_COUNTER y otros markers persistentes.
+    # Si alguien lo moviera a stage 6 por error, neuber-pi generaria una PI
+    # quemando un numero del counter y adjuntando un .docx invalido al sistema.
+    if deal_id == 467:
+        print(f"[PI] GUARD: deal sistema 467 ignorado")
+        return jsonify({'status': 'system deal ignored'}), 200
+
     if stage_current != DEAL_CERRADO_STAGE or stage_previous == DEAL_CERRADO_STAGE:
         return jsonify({'status': 'not a close event', 'stage': stage_current}), 200
 
@@ -1034,7 +1042,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.11'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.12'})
 
 
 if __name__ == '__main__':
