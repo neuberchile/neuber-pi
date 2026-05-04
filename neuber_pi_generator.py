@@ -23,7 +23,7 @@ import hashlib
 app = Flask(__name__)
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-PIPEDRIVE_API  = os.environ.get('PIPEDRIVE_API', '6675a4ed9924c6de144cf9f0dbd05f114ecd6435')
+PIPEDRIVE_API  = os.environ.get('PIPEDRIVE_API', '')  # v2.14 sesion 3.34: fallback hardcoded eliminado tras validacion
 PIPEDRIVE_BASE = 'https://api.pipedrive.com/v1'
 DEAL_CERRADO_STAGE = 6
 
@@ -1054,7 +1054,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.13'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.14'})
 
 
 if __name__ == '__main__':
