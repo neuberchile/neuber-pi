@@ -5,6 +5,7 @@ Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI →
 v2.9 — fix PI counter persistente en Pipedrive deal 467 (resuelve reset por deploy)
 v2.10 — parse_items tolerante a formato natural sin separadores (espacios, m3, USD, RL, etc.)
 v2.11 — endpoint /regenerate_pi_with_signature: regenera PI con imagen de firma del proveedor (Flujo 1.5)
+v2.17 — Basic Auth en /webhook (Session 3.35) — protege contra payloads forjados
 """
 
 from flask import Flask, request, jsonify
@@ -31,6 +32,44 @@ app = Flask(__name__)
 # para no romper produccion durante deploy. Una vez validado, segundo commit
 # elimina fail-open y lo hace obligatorio.
 PI_ADMIN_TOKEN = os.environ.get('PI_ADMIN_TOKEN', '')
+
+# ─── AUTH WEBHOOK BASIC (v2.17 sesion 3.35) ───────────────────────────────────
+# El endpoint /webhook recibe llamadas directas de Pipedrive. Pipedrive permite
+# configurar Basic Auth en la subscripcion del webhook (http_auth_user/password)
+# y envia Authorization: Basic <user:pass> en cada llamada. Este decorador
+# valida ese header en codigo. Las credenciales viven solo en Railway env vars
+# y son distintas para cada servicio (luke/leia/pi) para minimizar blast radius.
+#
+# Fail-open si las env vars estan vacias durante deploy gradual. Cleanup commit
+# posterior elimina el fail-open.
+WEBHOOK_BASIC_USER = os.environ.get('WEBHOOK_BASIC_USER', '')
+WEBHOOK_BASIC_PASS = os.environ.get('WEBHOOK_BASIC_PASS', '')
+
+def require_webhook_basic_auth(f):
+    """Decorador para /webhook. Valida Authorization: Basic <user:pass> de Pipedrive."""
+    from functools import wraps
+    import base64
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not WEBHOOK_BASIC_USER or not WEBHOOK_BASIC_PASS:
+            print(f"[PI] WARNING: WEBHOOK_BASIC_* env vars vacias, fail-open en {request.path}")
+            return f(*args, **kwargs)
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Basic '):
+            print(f"[PI] AUTH FAIL: missing Basic auth header on {request.path}")
+            return jsonify({'error': 'unauthorized'}), 401
+        try:
+            encoded = auth_header.split(' ', 1)[1].strip()
+            decoded = base64.b64decode(encoded).decode('utf-8', errors='replace')
+            user, _, pw = decoded.partition(':')
+        except Exception as e:
+            print(f"[PI] AUTH FAIL: malformed Basic auth on {request.path}: {e}")
+            return jsonify({'error': 'unauthorized'}), 401
+        if user != WEBHOOK_BASIC_USER or pw != WEBHOOK_BASIC_PASS:
+            print(f"[PI] AUTH FAIL: bad credentials on {request.path}")
+            return jsonify({'error': 'unauthorized'}), 401
+        return f(*args, **kwargs)
+    return wrapper
 
 def require_pi_token(f):
     """Decorador para endpoints write-heavy. Header esperado: X-PI-Token."""
@@ -869,8 +908,9 @@ def generate_pi_document(deal_data, pi_number, signature_image_bytes=None, signa
 
 # ─── WEBHOOK ──────────────────────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
-# v2.16 sesion 3.34: webhook NO usa @require_pi_token. Pipedrive ya manda Basic Auth.
-# Auth via X-PI-Token solo en endpoints invocados por Luke/manual.
+# v2.17 sesion 3.35: webhook ahora valida Basic Auth en codigo. Las credenciales
+# se setean por servicio en Railway env vars y matchean la subscripcion Pipedrive.
+@require_webhook_basic_auth
 def webhook():
     data = request.json
     if not data:
