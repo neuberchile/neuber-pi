@@ -22,6 +22,32 @@ import hashlib
 
 app = Flask(__name__)
 
+# ─── AUTH PI_ADMIN_TOKEN (v2.15 sesion 3.34) ──────────────────────────
+# Endpoints write-heavy (/webhook, /generate_pi, /regenerate_pi_with_signature,
+# /bank_hash/register) requieren header X-PI-Token. /health NO requiere auth
+# para que healthchecks externos funcionen.
+#
+# Migracion: si PI_ADMIN_TOKEN env var esta vacia, fail-open con warning log
+# para no romper produccion durante deploy. Una vez validado, segundo commit
+# elimina fail-open y lo hace obligatorio.
+PI_ADMIN_TOKEN = os.environ.get('PI_ADMIN_TOKEN', '')
+
+def require_pi_token(f):
+    """Decorador para endpoints write-heavy. Header esperado: X-PI-Token."""
+    from functools import wraps
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not PI_ADMIN_TOKEN:
+            print(f"[PI] WARNING: PI_ADMIN_TOKEN env var vacia, fail-open en {request.path}")
+            return f(*args, **kwargs)
+        provided = request.headers.get('X-PI-Token', '')
+        if provided != PI_ADMIN_TOKEN:
+            print(f"[PI] AUTH FAIL en {request.path}: token mismatch o ausente")
+            return jsonify({'ok': False, 'error': 'unauthorized'}), 401
+        return f(*args, **kwargs)
+    return wrapper
+
+
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 PIPEDRIVE_API  = os.environ.get('PIPEDRIVE_API', '')  # v2.14 sesion 3.34: fallback hardcoded eliminado tras validacion
 PIPEDRIVE_BASE = 'https://api.pipedrive.com/v1'
@@ -843,6 +869,7 @@ def generate_pi_document(deal_data, pi_number, signature_image_bytes=None, signa
 
 # ─── WEBHOOK ──────────────────────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
+@require_pi_token
 def webhook():
     data = request.json
     if not data:
@@ -913,6 +940,7 @@ def webhook():
 
 
 @app.route('/generate_pi/<int:deal_id>', methods=['GET'])
+@require_pi_token
 def generate_pi_manual(deal_id):
     # GUARD v2.13: NUNCA generar PI sobre el deal sistema 467
     # Sin este guard, llamadas accidentales/maliciosas a /generate_pi/467
@@ -949,6 +977,7 @@ def generate_pi_manual(deal_id):
 
 
 @app.route('/regenerate_pi_with_signature/<int:deal_id>', methods=['POST'])
+@require_pi_token
 def regenerate_pi_with_signature(deal_id):
     """
     Regenera la PI Word de un deal incluyendo la imagen de firma del proveedor.
@@ -1026,6 +1055,7 @@ def regenerate_pi_with_signature(deal_id):
 
 
 @app.route('/bank_hash/register', methods=['GET', 'POST'])
+@require_pi_token
 def bank_hash_register_all():
     """Registra/actualiza hashes SHA256 de todos los proveedores en la master note de deal 467.
     Idempotente: si un hash ya está registrado con el mismo valor, no hace nada.
@@ -1054,7 +1084,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.14'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.15'})
 
 
 if __name__ == '__main__':
