@@ -5,7 +5,7 @@ Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI →
 v2.9 — fix PI counter persistente en Pipedrive deal 467 (resuelve reset por deploy)
 v2.10 — parse_items tolerante a formato natural sin separadores (espacios, m3, USD, RL, etc.)
 v2.11 — endpoint /regenerate_pi_with_signature: regenera PI con imagen de firma del proveedor (Flujo 1.5)
-v2.18 — fail-closed: env vars validadas, sin fail-open (Session 3.35 cleanup)
+v2.19 — timing-safe Basic Auth comparison (Session 3.35)
 """
 
 from flask import Flask, request, jsonify
@@ -50,6 +50,7 @@ def require_webhook_basic_auth(f):
     """Decorador para /webhook. Valida Authorization: Basic <user:pass> de Pipedrive."""
     from functools import wraps
     import base64
+    import secrets
     @wraps(f)
     def wrapper(*args, **kwargs):
         if not WEBHOOK_BASIC_USER or not WEBHOOK_BASIC_PASS:
@@ -66,7 +67,7 @@ def require_webhook_basic_auth(f):
         except Exception as e:
             print(f"[PI] AUTH FAIL: malformed Basic auth on {request.path}: {e}")
             return jsonify({'error': 'unauthorized'}), 401
-        if user != WEBHOOK_BASIC_USER or pw != WEBHOOK_BASIC_PASS:
+        if not (secrets.compare_digest(user, WEBHOOK_BASIC_USER) and secrets.compare_digest(pw, WEBHOOK_BASIC_PASS)):
             print(f"[PI] AUTH FAIL: bad credentials on {request.path}")
             return jsonify({'error': 'unauthorized'}), 401
         return f(*args, **kwargs)
@@ -1126,7 +1127,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.18'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.19'})
 
 
 if __name__ == '__main__':
