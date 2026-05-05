@@ -5,7 +5,7 @@ Trigger: Deal cerrado (stage_id=6) en Pipedrive → genera documento Word PI →
 v2.9 — fix PI counter persistente en Pipedrive deal 467 (resuelve reset por deploy)
 v2.10 — parse_items tolerante a formato natural sin separadores (espacios, m3, USD, RL, etc.)
 v2.11 — endpoint /regenerate_pi_with_signature: regenera PI con imagen de firma del proveedor (Flujo 1.5)
-v2.17 — Basic Auth en /webhook (Session 3.35) — protege contra payloads forjados
+v2.18 — fail-closed: env vars validadas, sin fail-open (Session 3.35 cleanup)
 """
 
 from flask import Flask, request, jsonify
@@ -40,8 +40,9 @@ PI_ADMIN_TOKEN = os.environ.get('PI_ADMIN_TOKEN', '')
 # valida ese header en codigo. Las credenciales viven solo en Railway env vars
 # y son distintas para cada servicio (luke/leia/pi) para minimizar blast radius.
 #
-# Fail-open si las env vars estan vacias durante deploy gradual. Cleanup commit
-# posterior elimina el fail-open.
+# Fail-closed (v2.18 sesion 3.35 cleanup): env vars validadas y webhooks Pipedrive
+# recreados con Basic Auth. Si por error las env vars quedaran vacias, retornar 503
+# evita procesar webhooks no autenticados (postura defensiva).
 WEBHOOK_BASIC_USER = os.environ.get('WEBHOOK_BASIC_USER', '')
 WEBHOOK_BASIC_PASS = os.environ.get('WEBHOOK_BASIC_PASS', '')
 
@@ -52,8 +53,8 @@ def require_webhook_basic_auth(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         if not WEBHOOK_BASIC_USER or not WEBHOOK_BASIC_PASS:
-            print(f"[PI] WARNING: WEBHOOK_BASIC_* env vars vacias, fail-open en {request.path}")
-            return f(*args, **kwargs)
+            print(f"[PI] CRITICAL: WEBHOOK_BASIC_* env vars vacias, denying request on {request.path}")
+            return jsonify({'error': 'service unauthenticated, env vars missing'}), 503
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Basic '):
             print(f"[PI] AUTH FAIL: missing Basic auth header on {request.path}")
@@ -1125,7 +1126,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.16'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.18'})
 
 
 if __name__ == '__main__':
