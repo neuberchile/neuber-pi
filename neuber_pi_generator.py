@@ -869,7 +869,8 @@ def generate_pi_document(deal_data, pi_number, signature_image_bytes=None, signa
 
 # ─── WEBHOOK ──────────────────────────────────────────────────────────────────
 @app.route('/webhook', methods=['POST'])
-@require_pi_token
+# v2.16 sesion 3.34: webhook NO usa @require_pi_token. Pipedrive ya manda Basic Auth.
+# Auth via X-PI-Token solo en endpoints invocados por Luke/manual.
 def webhook():
     data = request.json
     if not data:
@@ -1084,7 +1085,7 @@ def bank_hash_register_all():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.15'})
+    return jsonify({'status': 'ok', 'service': 'Neuber PI Generator', 'version': '2.16'})
 
 
 if __name__ == '__main__':
